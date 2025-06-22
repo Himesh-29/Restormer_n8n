@@ -9,6 +9,9 @@ import shutil
 
 import argparse
 
+# Create the Datasets directory if it doesn't exist to prevent errors
+os.makedirs('Datasets', exist_ok=True)
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--data', type=str, required=True, help='train, test or train-test')
 args = parser.parse_args()
