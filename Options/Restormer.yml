@@ -48,7 +48,7 @@ network_g:
   out_channels: 3
   type: Restormer
 
-num_gpu: 2
+num_gpu: 1
 path: { pretrain_network_g: null, resume_state: null, strict_load_g: true }
 scale: 1
 
