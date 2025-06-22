@@ -1,58 +1,152 @@
 import os
 import sys
 import subprocess
+import platform
 import argparse
 import yaml
 import tempfile
 import torch
 
-def run_command(command):
+# --- Configuration ---
+VENV_DIR = "venv"
+
+def check_and_download_data(args):
+    """Check if data exists and download if it doesn't."""
+    if args.skip_data_download_check:
+        print("--- Skipping data download check. ---")
+        return
+
+    train_path = os.path.join(args.dataroot, 'train')
+    test_path = os.path.join(args.dataroot, 'test')
+
+    # Check if the base directories are missing or empty
+    train_missing = not os.path.exists(train_path) or not os.listdir(train_path)
+    test_missing = not os.path.exists(test_path) or not os.listdir(test_path)
+
+    # Only download if data is missing
+    if train_missing or test_missing:
+        print("--- Dataset not found or incomplete. Starting download... ---")
+        
+        data_to_download = ""
+        if train_missing and test_missing:
+            print("--- Both training and testing data are missing. ---")
+            data_to_download = "train-test"
+        elif train_missing:
+            print("--- Training data is missing. ---")
+            data_to_download = "train"
+        else: # test_missing
+            print("--- Testing data is missing. ---")
+            data_to_download = "test"
+
+        if data_to_download:
+            try:
+                # Command is now tailored to the user's download_data.py script
+                command = [
+                    sys.executable,
+                    "download_data.py",
+                    "--data",
+                    data_to_download,
+                ]
+                run_command(command, "Running data downloader...")
+            except FileNotFoundError:
+                print("--- ERROR: download_data.py not found. Please ensure it is in the root directory. ---")
+                sys.exit(1)
+            except Exception as e:
+                print(f"--- ERROR: An error occurred during data download: {e} ---")
+                sys.exit(1)
+    else:
+        print("--- Datasets found. Skipping download. ---")
+
+def is_in_virtual_env():
+    """Check if currently running in the project's virtual environment."""
+    # The second check is for legacy venv activation on some systems.
+    return sys.prefix == os.path.abspath(VENV_DIR) or hasattr(sys, 'real_prefix')
+
+def is_colab_or_kaggle():
+    """Check if running in a Google Colab or Kaggle notebook environment."""
+    return 'COLAB_GPU' in os.environ or 'KAGGLE_KERNEL_RUN_TYPE' in os.environ
+
+def run_command(command, message=None):
     """Runs a command, streams its output, and checks for errors."""
+    if message:
+        print(message)
     print(f"--- Running command: {' '.join(command)} ---")
     try:
-        # Use Popen with direct output passthrough for tqdm compatibility
         process = subprocess.Popen(
             command,
-            stdout=None,  # Direct passthrough to parent's stdout
-            stderr=None,  # Direct passthrough to parent's stderr
+            stdout=sys.stdout,
+            stderr=sys.stderr,
             text=True,
             encoding='utf-8'
         )
-        
-        # Wait for completion
         process.wait()
-        
         if process.returncode != 0:
             raise subprocess.CalledProcessError(process.returncode, command)
         print("--- Command finished successfully ---\n")
-        
-    except subprocess.CalledProcessError as e:
-        print(f"\n--- Command failed with exit code {e.returncode}: {' '.join(command)} ---")
-        sys.exit(1)
-    except FileNotFoundError:
-        print(f"\n--- Command not found: {command[0]}. Is it in your PATH? ---")
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        print(f"\n--- Command failed: {' '.join(command)} ---")
+        print(f"--- Error: {e} ---")
         sys.exit(1)
 
-def install():
-    """Install dependencies and run setup.py."""
+def setup_virtual_environment():
+    """Creates a venv and re-launches the script inside it if not already active."""
+    if is_colab_or_kaggle() or is_in_virtual_env():
+        return # No setup needed for notebooks or if already in venv
+
+    venv_path = os.path.abspath(VENV_DIR)
+    if not os.path.isdir(venv_path):
+        print(f"--- Creating virtual environment in '{venv_path}' ---")
+        run_command([sys.executable, "-m", "venv", venv_path])
+
+    # Determine the Python executable path within the venv
+    if platform.system() == "Windows":
+        python_executable = os.path.join(venv_path, "Scripts", "python.exe")
+    else:
+        python_executable = os.path.join(venv_path, "bin", "python")
+
+    print("--- Re-launching script inside the virtual environment ---")
+    # Re-launch the script with all original arguments using the venv's Python
+    run_command([python_executable, __file__] + sys.argv[1:])
+    sys.exit(0) # Exit the outer script gracefully
+
+def install(args):
+    """Install dependencies using pip."""
     print("--- Step 1: Installing dependencies ---")
-    run_command([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
-    print("--- Step 2: Setting up project with setup.py ---")
 
+    # Check if we're in Colab and adjust PyTorch installation accordingly
+    if is_colab_or_kaggle():
+        print("--- Detected Colab/Kaggle environment. Using optimized installation. ---")
+        # Colab usually has PyTorch pre-installed, but we'll ensure it's the right version
+        try:
+            import torch
+            print(f"--- PyTorch version: {torch.__version__} ---")
+            if torch.cuda.is_available():
+                print(f"--- CUDA available: {torch.cuda.get_device_name(0)} ---")
+        except ImportError:
+            print("--- Installing PyTorch for Colab ---")
+            run_command([
+                sys.executable, "-m", "pip", "install", "torch", "torchvision"
+            ])
+    else:
+        # Install PyTorch with specific CUDA version for local environments
+        print("--- Installing PyTorch with CUDA 11.8 support ---")
+        run_command([
+            sys.executable, "-m", "pip", "install", "torch", "torchvision",
+            "--index-url", "https://download.pytorch.org/whl/cu118"
+        ])
+
+    # Install all other packages from requirements.txt
+    print("--- Installing other dependencies ---")
+    run_command([
+        sys.executable, "-m", "pip", "install", "-r", "requirements.txt"
+    ])
+
+    print("--- Step 2: Setting up project with setup.py ---")
     setup_command = [sys.executable, "setup.py", "develop"]
 
-    # The setup script requires CUDA Toolkit for compilation, not just a GPU.
-    # We check for both a GPU and the CUDA_HOME env var. If either is missing,
-    # we skip compiling the extensions, which is what the original setup.py supports.
-    cuda_available = torch.cuda.is_available()
-    cuda_home_set = os.getenv('CUDA_HOME') is not None
-    
-    if not (cuda_available and cuda_home_set):
-        if not cuda_available:
-            print("--- INFO: PyTorch CUDA runtime is not available. ---")
-        if not cuda_home_set:
-            print("--- INFO: CUDA_HOME environment variable is not set. ---")
-        
+    # Skip CUDA extension compilation if CUDA is not fully available
+    if not (torch.cuda.is_available() and os.getenv('CUDA_HOME')):
+        print("--- INFO: PyTorch CUDA runtime or CUDA_HOME not available. ---")
         print("--- Passing --no_cuda_ext to setup.py to skip CUDA extension compilation. ---")
         setup_command.append("--no_cuda_ext")
 
@@ -117,22 +211,37 @@ def test(args):
     # Path to the model trained in the previous step
     model_path = f"experiments/{experiment_name}/models/net_g_latest.pth"
     
-    # Check if the model file actually exists before trying to test
     if not os.path.exists(model_path):
         print(f"--- ERROR: Trained model not found at {model_path}. Skipping test. ---")
         return
 
     command = [
-        sys.executable, 
-        "test.py",
-        "-opt",
-        args.opt,
-        f"--model_path={model_path}",
+        sys.executable, "test.py", "-opt", args.opt,
+        f"--model_path={model_path}"
     ]
+    if args.dataset:
+        command.append(f"--dataset={args.dataset}")
+        
     run_command(command)
     print("--- Testing complete ---")
 
 def main():
+    # This must be the first thing to run to ensure we are in the correct venv
+    setup_virtual_environment()
+    
+    # Welcome message for Colab users
+    if is_colab_or_kaggle():
+        print("="*60)
+        print("🚀 WELCOME TO RESTORMER ON COLAB!")
+        print("="*60)
+        print("This script will automatically:")
+        print("  ✅ Install all dependencies")
+        print("  ✅ Download training/testing datasets")
+        print("  ✅ Train the Restormer model")
+        print("  ✅ Test and evaluate the model")
+        print("="*60)
+        print()
+    
     parser = argparse.ArgumentParser(
         description="Restormer all-in-one script for setup, training, and testing.",
         formatter_class=argparse.RawTextHelpFormatter
@@ -158,22 +267,23 @@ def main():
         "--opt", type=str, default="Options/Restormer.yml",
         help="Path to the options YAML file for training."
     )
+    parser.add_argument(
+        '--dataset', type=str,
+        help='Name of a specific test dataset to evaluate (e.g., Rain100H). If not provided, all test datasets are evaluated.'
+    )
+    parser.add_argument(
+        '--skip-data-download-check',
+        action='store_true',
+        help='Bypass the check for dataset existence and automatic download.'
+    )
     args = parser.parse_args()
 
-    if not (hasattr(sys, 'real_prefix') or (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix)):
-        print("="*60)
-        print("ERROR: You must run this script inside a virtual environment.")
-        print("Please create and activate one first. For example:")
-        print("\n  python -m venv venv")
-        print("  .\\venv\\Scripts\\activate   (on Windows)")
-        print("  source venv/bin/activate  (on Linux/macOS)")
-        print("\nThen, run 'python launch.py' again.")
-        print("="*60)
-        sys.exit(1)
-
     if not args.skip_install:
-        install()
-    
+        install(args)
+
+    # Right after setup, before training/testing, check for data
+    check_and_download_data(args)
+
     if not args.skip_train:
         train(args)
     

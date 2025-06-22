@@ -22,4 +22,7 @@ requests
 matplotlib
 tqdm
 yacs
-joblib 
+joblib
+scikit-learn
+natsort
+h5py 
