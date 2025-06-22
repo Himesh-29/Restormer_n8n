@@ -1,0 +1,34 @@
+# Environments
+venv/
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Build and distribution
+.eggs/
+build/
+dist/
+*.egg-info/
+
+# Logs and experiment results
+experiments/
+tb_logger/
+results/
+
+# Datasets
+Datasets/
+
+.ipynb_checkpoints/
+*.png
+*.tif
+*.jpg
+*.pth
+*.mat
+*.npy
+.DS_Store
+
+# Except for the workflow diagram
+!assets/workflow.png
+

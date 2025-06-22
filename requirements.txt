@@ -1,0 +1,25 @@
+# Please install PyTorch and torchvision first, following the official instructions:
+# https://pytorch.org/get-started/locally/
+# Example for CUDA 12.1:
+# pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+ninja
+numpy
+opencv-python
+lmdb
+pyyaml
+gdown
+scipy
+tb-nightly
+addict
+einops
+future
+numba
+lpips
+scikit-image
+yapf
+requests
+matplotlib
+tqdm
+yacs
+joblib 
